@@ -104,6 +104,11 @@ fn io_error_to_response(e: std::io::Error, not_found_message: &str) -> (StatusCo
     }
 }
 
+/// Handler for the root GET route
+async fn root_handler() -> &'static str {
+    "filesearcherV5-web active"
+}
+
 /// Handler that receives metadata from headers and streams the raw body to disk
 async fn upload_file_handler(
     metadata: FileMetadata,
@@ -250,6 +255,7 @@ async fn download_file_handler(file_path: FilePath) -> Result<Response, (StatusC
 async fn main() {
     println!("starting");
     let app = Router::new()
+        .route("/", get(root_handler))
         .route("/upload", post(upload_file_handler))
         .route("/download", get(download_file_handler));
 
