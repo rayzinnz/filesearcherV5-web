@@ -1,17 +1,27 @@
 use axum::{
     body::Body,
-    extract::{FromRequestParts, Request},
+    extract::{FromRequestParts, Request, State},
     http::{header, StatusCode},
     response::Response,
     routing::{get, post},
     Router,
 };
 use futures_util::TryStreamExt;
+use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs::{self, File};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-const BASE_DIR: &str = "/home/ray/MEGA/Rays";
+#[derive(Deserialize)]
+struct Config {
+    base_dir: String,
+    port: u16,
+}
+
+#[derive(Clone)]
+struct AppState {
+    base_dir: PathBuf,
+}
 
 /// Extractor for custom file metadata passed via HTTP headers
 struct FileMetadata {
@@ -105,18 +115,19 @@ fn io_error_to_response(e: std::io::Error, not_found_message: &str) -> (StatusCo
 }
 
 /// Handler for the root GET route
-async fn root_handler() -> &'static str {
+async fn root_handler(State(_state): State<AppState>) -> &'static str {
     "filesearcherV5-web active"
 }
 
 /// Handler that receives metadata from headers and streams the raw body to disk
 async fn upload_file_handler(
+    State(state): State<AppState>,
     metadata: FileMetadata,
     request: Request<Body>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     println!("Uploading file {}", metadata.filename);
     // 1. Ensure target uploads directory exists
-    let upload_dir = PathBuf::from(BASE_DIR);
+    let upload_dir = state.base_dir.clone();
     fs::create_dir_all(&upload_dir).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -164,7 +175,10 @@ async fn upload_file_handler(
 }
 
 /// Handler that streams a file from disk based on the `file-path` header
-async fn download_file_handler(file_path: FilePath) -> Result<Response, (StatusCode, String)> {
+async fn download_file_handler(
+    State(state): State<AppState>,
+    file_path: FilePath,
+) -> Result<Response, (StatusCode, String)> {
     if file_path.path.trim().is_empty()
         || file_path.path.contains('\0')
         || file_path.path.chars().any(|c| c.is_control())
@@ -176,7 +190,7 @@ async fn download_file_handler(file_path: FilePath) -> Result<Response, (StatusC
     }
     println!("Downloading file {}", file_path.path);
 
-    let base = PathBuf::from(BASE_DIR);
+    let base = state.base_dir.clone();
     let base = fs::canonicalize(&base)
         .await
         .map_err(|e| io_error_to_response(e, "Base directory not found"))?;
@@ -252,16 +266,27 @@ async fn download_file_handler(file_path: FilePath) -> Result<Response, (StatusC
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     println!("starting");
+
+    let config_path = "config.toml";
+    let config_str = std::fs::read_to_string(config_path)?;
+    let config: Config = toml::from_str(&config_str)?;
+
+    let state = AppState {
+        base_dir: PathBuf::from(config.base_dir),
+    };
+
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/upload", post(upload_file_handler))
-        .route("/download", get(download_file_handler));
+        .route("/download", get(download_file_handler))
+        .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:34890")
-        .await
-        .unwrap();
-    println!("Server running on http://127.0.0.1:34890");
-    axum::serve(listener, app).await.unwrap();
+    let addr = format!("0.0.0.0:{}", config.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    println!("Server running on http://127.0.0.1:{}", config.port);
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
