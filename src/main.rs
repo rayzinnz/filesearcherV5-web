@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs::{self, File};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-const BASE_DIR: &str = "/home/ray/temp/webtransfer";
+const BASE_DIR: &str = "/home/ray/MEGA/Rays";
 
 /// Extractor for custom file metadata passed via HTTP headers
 struct FileMetadata {
@@ -109,6 +109,7 @@ async fn upload_file_handler(
     metadata: FileMetadata,
     request: Request<Body>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    println!("Uploading file {}", metadata.filename);
     // 1. Ensure target uploads directory exists
     let upload_dir = PathBuf::from(BASE_DIR);
     fs::create_dir_all(&upload_dir).await.map_err(|e| {
@@ -168,6 +169,7 @@ async fn download_file_handler(file_path: FilePath) -> Result<Response, (StatusC
             "Invalid file-path header".to_string(),
         ));
     }
+    println!("Downloading file {}", file_path.path);
 
     let base = PathBuf::from(BASE_DIR);
     let base = fs::canonicalize(&base)
