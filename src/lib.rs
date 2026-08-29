@@ -16,6 +16,7 @@ use tokio_util::io::{ReaderStream, StreamReader};
 pub struct Config {
     pub base_dir: String,
     pub port: u16,
+    pub file_db_path: String,
 }
 
 #[derive(Clone)]
@@ -257,6 +258,69 @@ pub async fn download_file_handler(
         })
 }
 
+pub async fn get_file_db_handler() -> Result<Response, (StatusCode, String)> {
+    let config_path = "config.toml";
+
+    let config_str = fs::read_to_string(config_path)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read config file: {e}"),
+            )
+        })?;
+
+    let config: Config = toml::from_str(&config_str).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse config file: {e}"),
+        )
+    })?;
+
+    let path = PathBuf::from(config.file_db_path);
+
+    let metadata = fs::metadata(&path)
+        .await
+        .map_err(|e| io_error_to_response(e, "File DB not found"))?;
+
+    if !metadata.is_file() {
+        return Err((StatusCode::NOT_FOUND, "File DB not found".to_string()));
+    }
+
+    let file = File::open(&path)
+        .await
+        .map_err(|e| io_error_to_response(e, "File DB not found"))?;
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file.db".to_string());
+
+    let safe_filename: String = filename
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"')
+        .collect();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, metadata.len().to_string())
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", safe_filename),
+        )
+        .body(body)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build response: {e}"),
+            )
+        })
+}
+
 async fn refresh_file_db_handler() -> Response {
     const FILE_SEARCHER_DAEMON: &str =
         "/home/ray/MEGA/Rays/Programming/rust/filesearcher-deamon-v5/target/release/file_searcher_deamon_v5";
@@ -332,6 +396,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root_handler))
         .route("/upload", post(upload_file_handler))
         .route("/download", get(download_file_handler))
+        .route("/get_file_db", get(get_file_db_handler))
         .route("/refresh_file_db", get(refresh_file_db_handler))
         .with_state(state)
 }
