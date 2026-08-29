@@ -1,15 +1,15 @@
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{FromRequestParts, State},
     http::{header, Request, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use futures_util::TryStreamExt;
 use serde::Deserialize;
-use std::path::{Component, Path, PathBuf};
-use tokio::fs::{self, File};
+use std::{path::{Component, Path, PathBuf}, process::Stdio};
+use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
 use tokio_util::io::{ReaderStream, StreamReader};
 
 #[derive(Deserialize)]
@@ -257,10 +257,81 @@ pub async fn download_file_handler(
         })
 }
 
+async fn refresh_file_db_handler() -> Response {
+    const FILE_SEARCHER_DAEMON: &str =
+        "/home/ray/MEGA/Rays/Programming/rust/filesearcher-deamon-v5/target/release/file_searcher_deamon_v5";
+
+    let mut child = match Command::new(FILE_SEARCHER_DAEMON)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to spawn file_searcher_deamon_v5: {e}"),
+            )
+            .into_response();
+        }
+    };
+
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to capture stdout from file_searcher_deamon_v5",
+            )
+            .into_response();
+        }
+    };
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(32);
+
+    tokio::spawn(async move {
+        let mut stdout = stdout;
+        let mut child = child;
+        let tx = tx;
+        let mut buf = vec![0u8; 8192];
+
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error reading file_searcher_deamon_v5 stdout: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = child.wait().await;
+    });
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|chunk| {
+            (Ok::<Bytes, std::io::Error>(Bytes::from(chunk)), rx)
+        })
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/plain; charset=utf-8")
+        .header("connection", "close")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(root_handler))
         .route("/upload", post(upload_file_handler))
         .route("/download", get(download_file_handler))
+        .route("/refresh_file_db", get(refresh_file_db_handler))
         .with_state(state)
 }
