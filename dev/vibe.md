@@ -1,14 +1,18 @@
 ```sh
 cd /home/ray/MEGA/Rays/Programming/rust/filesearcherV5-web
-aider --model openai/gemma-4-31b --chat-mode ask
+aider --model openai/llm --chat-mode ask
+aider --model openai/llm --lint-cmd "sh -c 'cargo check --message-format=short'" --auto-lint --yes-always
 
-/add src/main.rs /Cargo.toml
 
-aider --model openai/gemma-4-31b --lint-cmd "cargo check --message-format=short" --auto-lint
+/add src/main.rs src/lib.rs Cargo.toml config.toml
+/add src/lib.rs Cargo.toml
+
+/run cargo check --message-format=short
+/run cargo build
 ```
 
 **vibe**
 This is a web server written in rust using axum. It is for uploading and downloading files.
 
-Currently the upload route is working fine.
-Please add a new download route, that will download a file if found, based on header "file-path" which will contain a subdir and a filename. The downloaded file will be based on a locally set base directory, so subdirs will be under that directory.
+Add a new route to '/get_file_db'.
+This will send to the http client the file at `file_db_path` in config.toml.
