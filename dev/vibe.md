@@ -14,5 +14,4 @@ aider --model openai/llm --lint-cmd "sh -c 'cargo check --message-format=short'"
 **vibe**
 This is a web server written in rust using axum. It is for uploading and downloading files.
 
-Add a new route to '/get_file_db'.
-This will send to the http client the file at `file_db_path` in config.toml.
+In `upload_file_handler()`, set the mdate of the newly written file to the `metadata.filetime`
