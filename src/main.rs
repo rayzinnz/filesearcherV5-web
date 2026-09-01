@@ -1,10 +1,14 @@
-use filesearcherv5_web::{router, AppState, Config};
 use std::path::PathBuf;
+
+use filesearcherv5_web::{router, AppState, Config};
+use log::*;
 use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("starting");
+    helper_lib::setup_logger(LevelFilter::Debug, None, "", "html5ever");
+    
+    info!("starting");
 
     let config_path = "config.toml";
     let config_str = std::fs::read_to_string(config_path)?;
@@ -18,9 +22,8 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = format!("0.0.0.0:{}", config.port);
     let listener = TcpListener::bind(&addr).await?;
-    println!("Server running on http://127.0.0.1:{}", config.port);
+    info!("Server running on http://127.0.0.1:{}", config.port);
     axum::serve(listener, app).await?;
 
     Ok(())
 }
-

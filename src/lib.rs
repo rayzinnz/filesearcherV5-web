@@ -1,3 +1,5 @@
+use std::{path::{Component, Path, PathBuf}, process::Stdio};
+
 use axum::{
     body::{Body, Bytes},
     extract::{FromRequestParts, State},
@@ -6,9 +8,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
+use log::*;
 use serde::Deserialize;
-use std::{path::{Component, Path, PathBuf}, process::Stdio};
 use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
 use tokio_util::io::{ReaderStream, StreamReader};
 
@@ -26,7 +29,7 @@ pub struct AppState {
 
 pub struct FileMetadata {
     pub filename: String,
-    pub filetime: Option<String>,
+    pub filetime: Option<DateTime<Utc>>,
     pub sub_dir: Option<String>,
 }
 
@@ -56,7 +59,7 @@ where
         let filetime = headers
             .get("x-file-time")
             .and_then(|val| val.to_str().ok())
-            .map(|s| s.to_string());
+            .map(|s| DateTime::parse_from_rfc3339(s).expect("Failed to parse ISO datetime string").with_timezone(&Utc));
 
         let sub_dir = headers
             .get("x-sub-dir")
@@ -183,7 +186,7 @@ pub async fn upload_file_handler(
     metadata: FileMetadata,
     request: Request<Body>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    println!("Uploading file {}", metadata.filename);
+    info!("Uploading file {}", metadata.filename);
 
     let upload_dir = state.base_dir.clone();
     fs::create_dir_all(&upload_dir).await.map_err(|e| {
@@ -221,9 +224,17 @@ pub async fn upload_file_handler(
         )
     })?;
 
-    //TODO write the filedate
+    //write the filetime
+    if let Some(filetime) = metadata.filetime {
+        helper_lib::paths::set_mtime(&destination_path, filetime.into()).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to set mtime: {e}"),
+            )
+        })?;
+    }
 
-    println!(
+    info!(
         "Successfully uploaded '{}' (Source: {:?}, Timestamp: {:?})",
         safe_filename, metadata.sub_dir, metadata.filetime
     );
@@ -245,7 +256,7 @@ pub async fn download_file_handler(
         ));
     }
 
-    println!("Downloading file {}", file_path.path);
+    info!("Downloading file {}", file_path.path);
 
     let base = state.base_dir.clone();
     let base = fs::canonicalize(&base)
@@ -432,7 +443,7 @@ async fn refresh_file_db_handler() -> Response {
                     }
                 }
                 Err(e) => {
-                    eprintln!("error reading file_searcher_deamon_v5 stdout: {e}");
+                    error!("error reading file_searcher_deamon_v5 stdout: {e}");
                     break;
                 }
             }
