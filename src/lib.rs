@@ -8,7 +8,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use log::*;
 use serde::Deserialize;
@@ -29,7 +28,7 @@ pub struct AppState {
 
 pub struct FileMetadata {
     pub filename: String,
-    pub filetime: Option<DateTime<Utc>>,
+    pub filetime: Option<i64>,
     pub sub_dir: Option<String>,
 }
 
@@ -56,10 +55,10 @@ where
             })?
             .to_string();
 
-        let filetime = headers
+        let filetime: Option<i64> = headers
             .get("x-file-time")
             .and_then(|val| val.to_str().ok())
-            .map(|s| DateTime::parse_from_rfc3339(s).expect("Failed to parse ISO datetime string").with_timezone(&Utc));
+            .map(|s| s.parse().expect("Could not parse to i64"));
 
         let sub_dir = headers
             .get("x-sub-dir")
@@ -119,68 +118,6 @@ pub async fn root_handler(State(_state): State<AppState>) -> &'static str {
     "filesearcherV5-web active"
 }
 
-// fn parse_filetime(value: &str) -> Option<filetime::FileTime> {                                                                                                                    
-                                                                                                                                                                                  
-//     let value = value.trim();                                                                                                                                                     
-                                                                                                                                                                                  
-//     if value.is_empty() {                                                                                                                                                         
-                                                                                                                                                                                  
-//         return None;                                                                                                                                                              
-                                                                                                                                                                                  
-//     }                                                                                                                                                                             
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-//     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(value) {                                                                                                                 
-                                                                                                                                                                                  
-//         return Some(filetime::FileTime::from_unix_time(                                                                                                                           
-                                                                                                                                                                                  
-//             dt.timestamp(),                                                                                                                                                       
-                                                                                                                                                                                  
-//             dt.timestamp_subsec_nanos() as u32,                                                                                                                                   
-                                                                                                                                                                                  
-//         ));                                                                                                                                                                       
-                                                                                                                                                                                  
-//     }                                                                                                                                                                             
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-//     if let Ok(date) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {                                                                                                      
-                                                                                                                                                                                  
-//         let dt = date.and_hms_opt(0, 0, 0)?;                                                                                                                                      
-                                                                                                                                                                                  
-//         let dt = chrono::Utc.from_utc_datetime(&dt);                                                                                                                              
-                                                                                                                                                                                  
-//         return Some(filetime::FileTime::from_unix_time(dt.timestamp(), 0));                                                                                                       
-                                                                                                                                                                                  
-//     }                                                                                                                                                                             
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-//     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {                                                                                           
-                                                                                                                                                                                  
-//         let dt = chrono::Utc.from_utc_datetime(&dt);                                                                                                                              
-                                                                                                                                                                                  
-//         return Some(filetime::FileTime::from_unix_time(dt.timestamp(), 0));                                                                                                       
-                                                                                                                                                                                  
-//     }                                                                                                                                                                             
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-//     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {                                                                                           
-                                                                                                                                                                                  
-//         let dt = chrono::Utc.from_utc_datetime(&dt);                                                                                                                              
-                                                                                                                                                                                  
-//         return Some(filetime::FileTime::from_unix_time(dt.timestamp(), 0));                                                                                                       
-                                                                                                                                                                                  
-//     }                                                                                                                                                                             
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-                                                                                                                                                                                  
-//     None                                                                                                                                                                          
-                                                                                                                                                                                  
-// }
-
 pub async fn upload_file_handler(
     State(state): State<AppState>,
     metadata: FileMetadata,
@@ -201,7 +138,11 @@ pub async fn upload_file_handler(
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Invalid file name".to_string()))?;
 
-    let destination_path = upload_dir.join(&safe_filename);
+    let mut destination_path = upload_dir;
+    if let Some(sub_dir) = &metadata.sub_dir {
+        destination_path.push(sub_dir);
+    }
+    destination_path.push(&safe_filename);
 
     let body_stream = request
         .into_body()
@@ -226,7 +167,8 @@ pub async fn upload_file_handler(
 
     //write the filetime
     if let Some(filetime) = metadata.filetime {
-        helper_lib::paths::set_mtime(&destination_path, filetime.into()).map_err(|e| {
+        let mtime = helper_lib::datetime::unixtimestamp_to_systemtime(filetime as u64);
+        helper_lib::paths::set_mtime(&destination_path, mtime).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to set mtime: {e}"),
