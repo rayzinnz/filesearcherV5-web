@@ -8,7 +8,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use log::*;
 use serde::Deserialize;
 use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
@@ -348,7 +348,7 @@ pub async fn delete_file_handler(
             .map_err(|e| io_error_to_response(e, "Failed to read directory"))?;
 
         if entries
-            .next()
+            .next_entry()
             .await
             .transpose()
             .map_err(|e| io_error_to_response(e, "Failed to read directory"))?
