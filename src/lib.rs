@@ -276,6 +276,8 @@ pub async fn download_file_handler(
 }
 
 pub async fn get_file_db_handler() -> Result<Response, (StatusCode, String)> {
+    info!("start get_file_db_handler");
+
     let config_path = "config.toml";
 
     let config_str = fs::read_to_string(config_path)
@@ -321,6 +323,8 @@ pub async fn get_file_db_handler() -> Result<Response, (StatusCode, String)> {
         .filter(|c| !c.is_control() && *c != '"')
         .collect();
 
+    info!("end get_file_db_handler");
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -339,6 +343,8 @@ pub async fn get_file_db_handler() -> Result<Response, (StatusCode, String)> {
 }
 
 async fn refresh_file_db_handler() -> Response {
+    info!("start refresh_file_db_handler");
+
     const FILE_SEARCHER_DAEMON: &str =
         "/home/ray/MEGA/Rays/Programming/rust/filesearcher-deamon-v5/target/release/file_searcher_deamon_v5";
 
@@ -374,7 +380,7 @@ async fn refresh_file_db_handler() -> Response {
         let mut stdout = stdout;
         let mut child = child;
         let tx = tx;
-        let mut buf = vec![0u8; 8192];
+        let mut buf = vec![0u8; 32];
 
         loop {
             match stdout.read(&mut buf).await {
@@ -399,6 +405,8 @@ async fn refresh_file_db_handler() -> Response {
             (Ok::<Bytes, std::io::Error>(Bytes::from(chunk)), rx)
         })
     });
+
+    info!("end refresh_file_db_handler");
 
     Response::builder()
         .status(StatusCode::OK)

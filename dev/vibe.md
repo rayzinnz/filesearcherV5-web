@@ -1,7 +1,9 @@
+https://aider.chat/docs/more/edit-formats.html
+
 ```sh
 cd /home/ray/MEGA/Rays/Programming/rust/filesearcherV5-web
 aider --model openai/llm --chat-mode ask
-aider --model openai/llm --lint-cmd "sh -c 'cargo check --message-format=short'" --auto-lint --yes-always
+aider --model openai/llm --lint-cmd "sh -c 'cargo check --message-format=short'" --auto-lint --edit-format diff --yes-always
 
 
 /add src/main.rs src/lib.rs Cargo.toml config.toml
@@ -14,4 +16,4 @@ aider --model openai/llm --lint-cmd "sh -c 'cargo check --message-format=short'"
 **vibe**
 This is a web server written in rust using axum. It is for uploading and downloading files.
 
-In `upload_file_handler()`, set the mdate of the newly written file to the `metadata.filetime`
+Add a new route "delete_file" which will take a sub_dir filepath (including filename), and on this server delete the file at base_dir+sub_dir(including filename), if it exists.
