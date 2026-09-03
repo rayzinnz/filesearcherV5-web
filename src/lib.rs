@@ -347,17 +347,15 @@ pub async fn delete_file_handler(
             .await
             .map_err(|e| io_error_to_response(e, "Failed to read directory"))?;
 
-        if entries
-            .next_entry()
-            .await
-            .transpose()
-            .map_err(|e| io_error_to_response(e, "Failed to read directory"))?
-            .is_some()
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                "Directory is not empty".to_string(),
-            ));
+        match entries.next_entry().await {
+            Some(Ok(_)) => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Directory is not empty".to_string(),
+                ));
+            }
+            Some(Err(e)) => return Err(io_error_to_response(e, "Failed to read directory")),
+            None => {}
         }
 
         match fs::remove_dir(&candidate).await {
