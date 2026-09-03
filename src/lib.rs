@@ -5,7 +5,7 @@ use axum::{
     extract::{FromRequestParts, State},
     http::{header, Request, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use futures_util::TryStreamExt;
@@ -275,6 +275,78 @@ pub async fn download_file_handler(
         })
 }
 
+pub async fn delete_file_handler(
+    State(state): State<AppState>,
+    file_path: FilePath,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if file_path.path.trim().is_empty()
+        || file_path.path.contains('\0')
+        || file_path.path.chars().any(|c| c.is_control())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid file-path header".to_string(),
+        ));
+    }
+
+    info!("Deleting file {}", file_path.path);
+
+    let base = state.base_dir.clone();
+    let base = fs::canonicalize(&base)
+        .await
+        .map_err(|e| io_error_to_response(e, "Base directory not found"))?;
+
+    let rel = Path::new(&file_path.path);
+
+    if rel.is_absolute() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "file-path must be relative".to_string(),
+        ));
+    }
+
+    if rel
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "file-path must not contain '..'".to_string(),
+        ));
+    }
+
+    let candidate = base.join(rel);
+    let candidate = match fs::canonicalize(&candidate).await {
+        Ok(candidate) => candidate,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            info!("File not found, nothing to delete: {}", file_path.path);
+            return Ok(StatusCode::OK);
+        }
+        Err(e) => return Err(io_error_to_response(e, "File not found")),
+    };
+
+    if !candidate.starts_with(&base) {
+        return Err((StatusCode::FORBIDDEN, "Access denied".to_string()));
+    }
+
+    let metadata = fs::metadata(&candidate)
+        .await
+        .map_err(|e| io_error_to_response(e, "File not found"))?;
+
+    if !metadata.is_file() {
+        return Err((StatusCode::NOT_FOUND, "Not a file".to_string()));
+    }
+
+    match fs::remove_file(&candidate).await {
+        Ok(()) => {
+            info!("Deleted file {}", file_path.path);
+            Ok(StatusCode::OK)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StatusCode::OK),
+        Err(e) => Err(io_error_to_response(e, "Failed to delete file")),
+    }
+}
+
 pub async fn get_file_db_handler() -> Result<Response, (StatusCode, String)> {
     info!("start get_file_db_handler");
 
@@ -421,6 +493,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root_handler).post(root_handler))
         .route("/upload", post(upload_file_handler))
         .route("/download", get(download_file_handler).post(download_file_handler))
+        .route("/delete_file", delete(delete_file_handler).post(delete_file_handler))
         .route("/get_file_db", get(get_file_db_handler).post(get_file_db_handler))
         .route("/refresh_file_db", get(refresh_file_db_handler).post(refresh_file_db_handler))
         .with_state(state)
