@@ -8,7 +8,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use log::*;
 use serde::Deserialize;
 use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
