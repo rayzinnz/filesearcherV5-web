@@ -333,17 +333,43 @@ pub async fn delete_file_handler(
         .await
         .map_err(|e| io_error_to_response(e, "File not found"))?;
 
-    if !metadata.is_file() {
-        return Err((StatusCode::NOT_FOUND, "Not a file".to_string()));
-    }
-
-    match fs::remove_file(&candidate).await {
-        Ok(()) => {
-            info!("Deleted file {}", file_path.path);
-            Ok(StatusCode::OK)
+    if metadata.is_file() {
+        match fs::remove_file(&candidate).await {
+            Ok(()) => {
+                info!("Deleted file {}", file_path.path);
+                Ok(StatusCode::OK)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StatusCode::OK),
+            Err(e) => Err(io_error_to_response(e, "Failed to delete file")),
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StatusCode::OK),
-        Err(e) => Err(io_error_to_response(e, "Failed to delete file")),
+    } else if metadata.is_dir() {
+        let mut entries = fs::read_dir(&candidate)
+            .await
+            .map_err(|e| io_error_to_response(e, "Failed to read directory"))?;
+
+        if entries
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| io_error_to_response(e, "Failed to read directory"))?
+            .is_some()
+        {
+            return Err((
+                StatusCode::CONFLICT,
+                "Directory is not empty".to_string(),
+            ));
+        }
+
+        match fs::remove_dir(&candidate).await {
+            Ok(()) => {
+                info!("Deleted empty directory {}", file_path.path);
+                Ok(StatusCode::OK)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StatusCode::OK),
+            Err(e) => Err(io_error_to_response(e, "Failed to delete directory")),
+        }
+    } else {
+        Err((StatusCode::NOT_FOUND, "Not a file or directory".to_string()))
     }
 }
 
