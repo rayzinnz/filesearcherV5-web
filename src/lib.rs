@@ -246,13 +246,26 @@ pub async fn download_file_handler(
         return Err((StatusCode::NOT_FOUND, "Not a file".to_string()));
     }
 
-//TODO: compress using `zstd` and encrypt using `cryptostream`, to get past zscaler
-    let file = File::open(&candidate)
+    let mut file = File::open(&candidate)
         .await
         .map_err(|e| io_error_to_response(e, "File not found"))?;
 
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
+    let mut plaintext = Vec::new();
+    file.read_to_end(&mut plaintext)
+        .await
+        .map_err(|e| io_error_to_response(e, "Failed to read file"))?;
+
+    let compressed = zstd::encode_all(plaintext.as_slice(), 3)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to compress file: {e}"),
+            )
+        })?;
+
+    let encrypted = cryptostream::encrypt(&compressed);
+    let content_length = encrypted.len();
+    let body = Body::from(encrypted);
 
     let filename = candidate
         .file_name()
@@ -267,7 +280,8 @@ pub async fn download_file_handler(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::CONTENT_LENGTH, metadata.len().to_string())
+        .header(header::CONTENT_LENGTH, content_length.to_string())
+        .header("x-encoding", "zstd+cryptostream")
         .header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", safe_filename),
