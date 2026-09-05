@@ -192,13 +192,12 @@ pub async fn download_file_handler(
         || file_path.path.contains('\0')
         || file_path.path.chars().any(|c| c.is_control())
     {
+        error!("Downloading error: Invalid file-path");
         return Err((
             StatusCode::BAD_REQUEST,
-            "Invalid file-path header".to_string(),
+            "Invalid file-path".to_string(),
         ));
     }
-
-    info!("Downloading file {}", file_path.path);
 
     let base = state.base_dir.clone();
     let base = fs::canonicalize(&base)
@@ -208,6 +207,7 @@ pub async fn download_file_handler(
     let rel = Path::new(&file_path.path);
 
     if rel.is_absolute() {
+        error!("Downloading error: file-path must be relative");
         return Err((
             StatusCode::BAD_REQUEST,
             "file-path must be relative".to_string(),
@@ -218,6 +218,7 @@ pub async fn download_file_handler(
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
+        error!("Downloading error: file-path must not contain '..'");
         return Err((
             StatusCode::BAD_REQUEST,
             "file-path must not contain '..'".to_string(),
@@ -229,7 +230,10 @@ pub async fn download_file_handler(
         .await
         .map_err(|e| io_error_to_response(e, "File not found"))?;
 
+    info!("Downloading file {}", candidate.to_string_lossy());
+
     if !candidate.starts_with(&base) {
+        error!("Downloading error: Access denied");
         return Err((StatusCode::FORBIDDEN, "Access denied".to_string()));
     }
 
@@ -238,9 +242,11 @@ pub async fn download_file_handler(
         .map_err(|e| io_error_to_response(e, "File not found"))?;
 
     if !metadata.is_file() {
+        error!("Downloading error: Not a file");
         return Err((StatusCode::NOT_FOUND, "Not a file".to_string()));
     }
 
+//TODO: compress using `zstd` and encrypt using `cryptostream`, to get past zscaler
     let file = File::open(&candidate)
         .await
         .map_err(|e| io_error_to_response(e, "File not found"))?;
@@ -268,6 +274,7 @@ pub async fn download_file_handler(
         )
         .body(body)
         .map_err(|e| {
+            error!("Failed to build response: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to build response: {e}"),
@@ -348,14 +355,14 @@ pub async fn delete_file_handler(
             .map_err(|e| io_error_to_response(e, "Failed to read directory"))?;
 
         match entries.next_entry().await {
-            Some(Ok(_)) => {
+            Ok(Some(_)) => {
                 return Err((
                     StatusCode::CONFLICT,
                     "Directory is not empty".to_string(),
                 ));
             }
-            Some(Err(e)) => return Err(io_error_to_response(e, "Failed to read directory")),
-            None => {}
+            Err(e) => return Err(io_error_to_response(e, "Failed to read directory")),
+            Ok(None) => {}
         }
 
         match fs::remove_dir(&candidate).await {
