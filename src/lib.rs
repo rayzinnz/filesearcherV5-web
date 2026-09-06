@@ -9,10 +9,14 @@ use axum::{
     Router,
 };
 use futures_util::TryStreamExt;
+use helper_lib::crypto::{self, cipher_256_from_key, nonce_96_as_bytes};
 use log::*;
 use serde::Deserialize;
 use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
 use tokio_util::io::{ReaderStream, StreamReader};
+
+// const KEY:[u8;32] = [6u8,159,69,218,142,165,251,71,185,35,230,194,64,26,107,130,117,220,36,80,1,48,3,10,192,68,217,246,183,169,235,73];
+const KEY:&str = "x38oY3S*0'Z(@'az@-kRia&0W&G+D2Y_";
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -263,29 +267,36 @@ pub async fn download_file_handler(
             )
         })?;
 
-    let encrypted = cryptostream::encrypt(&compressed);
+    
+    let cypher = cipher_256_from_key(
+            KEY.as_bytes().try_into().unwrap()
+        ).map_err(|e| {
+                error!("Failed to create cypher: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to create cypher: {e}"),
+                )
+
+            })?;
+    let encrypted = crypto::encrypt(
+        &cypher,
+        &nonce_96_as_bytes(),
+        &compressed,
+    ).map_err(|e| {
+        error!("Failed to encrypt: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to encrypt: {e}"),
+        )
+
+    })?;
     let content_length = encrypted.len();
     let body = Body::from(encrypted);
-
-    let filename = candidate
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".to_string());
-
-    let safe_filename: String = filename
-        .chars()
-        .filter(|c| !c.is_control() && *c != '"')
-        .collect();
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_LENGTH, content_length.to_string())
-        .header("x-encoding", "zstd+cryptostream")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", safe_filename),
-        )
         .body(body)
         .map_err(|e| {
             error!("Failed to build response: {e}");
