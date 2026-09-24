@@ -1,21 +1,16 @@
 use std::{path::{Component, Path, PathBuf}, process::Stdio};
 
 use axum::{
-    body::{Body, Bytes},
-    extract::{FromRequestParts, State},
-    http::{header, Request, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{delete, get, post},
-    Router,
+    Router, body::{Body, Bytes, to_bytes}, extract::{FromRequestParts, State}, http::{Request, StatusCode, header}, response::{IntoResponse, Response}, routing::{delete, get, post},
 };
+use base64::{Engine, prelude::BASE64_URL_SAFE};
 use futures_util::TryStreamExt;
-use helper_lib::crypto::{self, cipher_256_from_key, nonce_96_as_bytes};
+use helper_lib::crypto::{self, cipher_256_from_key, decrypt, nonce_96_as_bytes};
 use log::*;
 use serde::Deserialize;
 use tokio::{fs::{self, File}, io::AsyncReadExt, process::Command, sync::mpsc};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-// const KEY:[u8;32] = [6u8,159,69,218,142,165,251,71,185,35,230,194,64,26,107,130,117,220,36,80,1,48,3,10,192,68,217,246,183,169,235,73];
 const KEY:&str = "x38oY3S*0'Z(@'az@-kRia&0W&G+D2Y_";
 
 #[derive(Deserialize)]
@@ -127,17 +122,17 @@ pub async fn upload_file_handler(
     metadata: FileMetadata,
     request: Request<Body>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    info!("Uploading file {}", metadata.filename);
-
     let upload_dir = state.base_dir.clone();
-    fs::create_dir_all(&upload_dir).await.map_err(|e| {
+
+    let safe_filename = BASE64_URL_SAFE.decode(&metadata.filename).map_err(|e| {
+        error!("Failed to decode filename {}: {}", metadata.filename, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create storage directory: {e}"),
+            format!("Failed to decode filename: {e}"),
         )
     })?;
-
-    let safe_filename = PathBuf::from(&metadata.filename)
+    let safe_filename = String::from_utf8_lossy(&safe_filename).to_string();
+    let safe_filename = PathBuf::from(safe_filename)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Invalid file name".to_string()))?;
@@ -146,33 +141,81 @@ pub async fn upload_file_handler(
     if let Some(sub_dir) = &metadata.sub_dir {
         destination_path.push(sub_dir);
     }
+    fs::create_dir_all(&destination_path).await.map_err(|e| {
+        error!("Failed to create sub_dir {}: {}", destination_path.to_string_lossy(), e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create storage directory: {e}"),
+        )
+    })?;
     destination_path.push(&safe_filename);
+    info!("Uploading file {}", destination_path.to_string_lossy());
 
-    let body_stream = request
-        .into_body()
-        .into_data_stream()
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
-
-    let mut reader = StreamReader::new(body_stream);
-
-    let mut file = File::create(&destination_path).await.map_err(|e| {
+    let bytes = to_bytes(request.into_body(), usize::MAX).await.map_err(|e| {
+        error!("Failed to to_bytes(request.into_body(): {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create file: {e}"),
+            format!("Failed to to_bytes(request.into_body(): {e}"),
+        )
+    })?;
+    let cipher = cipher_256_from_key(KEY.as_bytes().try_into().unwrap()).map_err(|e| {
+        error!("Failed to cipher_256_from_key: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to cipher_256_from_key: {e}"),
+        )
+    })?;
+    let bytes = decrypt(&cipher, &bytes).map_err(|e| {
+        error!("Failed to decrypt: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to decrypt: {e}"),
+        )
+    })?;
+    let bytes = zstd::decode_all(bytes.as_slice()).map_err(|e| {
+        error!("Failed to decompress: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to decompress: {e}"),
         )
     })?;
 
-    tokio::io::copy(&mut reader, &mut file).await.map_err(|e| {
+    tokio::fs::write(&destination_path, bytes).await.map_err(|e| {
+        error!("Failed to write file {}: {}", destination_path.to_string_lossy(), e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed writing stream to disk: {e}"),
+            format!("Failed to write file: {e}"),
         )
     })?;
+
+    // let body_stream = request
+    //     .into_body()
+    //     .into_data_stream()
+    //     .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+
+    // let mut reader = StreamReader::new(body_stream);
+
+    // let mut file = File::create(&destination_path).await.map_err(|e| {
+    //     error!("Failed to create file: {e}");
+    //     (
+    //         StatusCode::INTERNAL_SERVER_ERROR,
+    //         format!("Failed to create file: {e}"),
+    //     )
+    // })?;
+
+    // tokio::io::copy(&mut reader, &mut file).await.map_err(|e| {
+    //     error!("Failed writing stream to disk: {e}");
+    //     (
+    //         StatusCode::INTERNAL_SERVER_ERROR,
+    //         format!("Failed writing stream to disk: {e}"),
+    //     )
+    // })?;
 
     //write the filetime
     if let Some(filetime) = metadata.filetime {
         let mtime = helper_lib::datetime::unixtimestamp_to_systemtime(filetime as u64);
         helper_lib::paths::set_mtime(&destination_path, mtime).map_err(|e| {
+            error!("Failed to set mtime: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to set mtime: {e}"),
